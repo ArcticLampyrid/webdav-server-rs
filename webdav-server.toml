@@ -43,6 +43,19 @@
   threads = 8
 
 #
+# JWT settings.
+#
+[jwt]
+  # Enabled or not
+  enabled = true
+  # Store in cookie with which name?
+  cookie-name = "token"
+  # Secret to sign the token with
+  secret = "test"
+  # Timeout (in seconds) for the token
+  tiemout = 3600
+
+#
 # Htpasswd authentication settings.
 #
 [htpasswd.example]

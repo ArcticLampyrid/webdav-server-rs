@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub accounts: Accounts,
     #[serde(default)]
+    pub jwt:      Jwt,
+    #[serde(default)]
     pub pam:      Pam,
     #[serde(default)]
     pub htpasswd: HashMap<String, HtPasswd>,
@@ -57,6 +59,15 @@ pub struct Accounts {
     pub acct_type: Option<AcctType>,
     #[serde(default)]
     pub realm:     Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct Jwt {
+    pub enabled: bool,
+    #[serde(rename = "cookie-name")]
+    pub cookie_name:  Option<String>,
+    pub secret: String,
+    pub tiemout: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

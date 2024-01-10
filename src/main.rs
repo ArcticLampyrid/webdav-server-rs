@@ -33,6 +33,7 @@ use std::os::unix::io::{FromRawFd, AsRawFd};
 use std::process::exit;
 use std::sync::Arc;
 
+use auth::AuthResult;
 use clap::clap_app;
 use headers::{authorization::Basic, Authorization, HeaderMapExt};
 use http::status::StatusCode;
@@ -236,23 +237,24 @@ impl Server {
             Some(Auth::False) => false,
             Some(Auth::Opportunistic) | None => auth_hdr.is_some(),
         };
-        let auth_user = if do_auth {
-            let user = match self.auth.auth(&req, location, remote_ip).await {
+        let auth_result = if do_auth {
+            let result = match self.auth.auth(&req, location, remote_ip).await {
                 Ok(user) => user,
                 Err(status) => return self.auth_error(status, location).await,
             };
             // if there was a :user in the route, return error if it does not match.
-            if user_param.map(|u| u != &user).unwrap_or(false) {
+            if user_param.map(|u| u != &result.user).unwrap_or(false) {
                 debug!("handle: auth user and :user mismatch");
                 return self.auth_error(StatusCode::UNAUTHORIZED, location).await;
             }
-            Some(user)
+            Some(result)
         } else {
             None
         };
+        let auth_user = auth_result.as_ref().map(|r| &r.user);
 
         // Now see if we want to do a account lookup, for uid/gid/homedir.
-        let pwd = match self.acct(location, auth_user.as_ref(), user_param).await {
+        let pwd = match self.acct(location, auth_user, user_param).await {
             Ok(pwd) => pwd,
             Err(status) => return self.auth_error(status, location).await,
         };
@@ -308,7 +310,7 @@ impl Server {
         };
         let fs = match location.handler {
             Handler::Virtroot => {
-                let auth_user = auth_user.as_ref().map(String::to_owned);
+                let auth_user = auth_user.map(String::to_owned);
                 RootFs::new(dir, auth_user, auth_ugid) as Box<dyn DavFileSystem>
             },
             Handler::Filesystem => {
@@ -329,14 +331,14 @@ impl Server {
             .hide_symlinks(hide_symlinks)
             .autoindex(location.autoindex);
         if let Some(auth_user) = auth_user {
-            config = config.principal(auth_user);
+            config = config.principal(auth_user.clone());
         }
         if let Some(indexfile) = location.indexfile.clone() {
             config = config.indexfile(indexfile);
         }
 
         // All set.
-        self.run_davhandler(config, req).await
+        self.run_davhandler(config, req, auth_result.as_ref()).await
     }
 
     async fn build_error(&self, code: StatusCode, location: Option<&Location>) -> HttpResult {
@@ -367,8 +369,13 @@ impl Server {
     }
 
     // Call the davhandler, then add headers to the response.
-    async fn run_davhandler(&self, config: DavConfig, req: HttpRequest) -> HttpResult {
-        let resp = self.dh.handle_with(config, req).await;
+    async fn run_davhandler(&self, config: DavConfig, req: HttpRequest, auth_result: Option<&AuthResult>) -> HttpResult {
+        let mut resp = self.dh.handle_with(config, req).await;
+        if let Some(auth_result) = auth_result {
+            if let Err(e) = self.auth.devired_token(&mut resp, auth_result).await {
+                info!("run_davhandler: devired_token: {}", e);
+            }
+        }
         let (mut parts, body) = resp.into_parts();
         self.set_headers(&mut parts.headers);
         Ok(http::Response::from_parts(parts, body))
